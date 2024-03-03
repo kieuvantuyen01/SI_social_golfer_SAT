@@ -10,18 +10,20 @@ from zipfile import BadZipFile
 from openpyxl.utils.dataframe import dataframe_to_rows
 import time
 import math
+from datetime import datetime
 
 num_weeks: int  # number of weeks
 players_per_group: int  # players per group
 num_groups: int  # number of groups
 num_players: int  # players per group * number of groups
-time_budget = 10
+time_budget = 600
 show_additional_info = True
 show_additional_info_str = "Yes"
 
 sat_solver: Solver
 
 all_clauses = []
+id_counter = 1
 
 def generate_all_clauses():
     ensure_golfer_plays_at_least_once_per_week()
@@ -50,21 +52,26 @@ def ensure_golfer_plays_at_least_once_per_week():
 
 # (AMO) Each golfer plays at most once in each group each week
 def assign_golfers_to_groups():
+    """
+    Assigns golfers to groups for each week and position using SAT solver.
+    """
     k = len(bin(num_players)[2:])  # number of binary digits needed to represent num_players
     for golfer in range(1, num_players + 1):
         golfer_binary = [int(x) for x in bin(golfer)[2:].zfill(k)]  # binary representation of golfer
         for week in range(1, num_weeks + 1):
-            for group in range(1, num_groups + 1):
-                for position in range(1, players_per_group + 1):
+            for position in range(1, players_per_group + 1):
+                for group in range(1, num_groups + 1):
                     Y = [0] * k  # new variables Y1, Y2, ..., Yk
                     for j in range(k):
                         if golfer_binary[j] == 1:
                             Y[j] = get_variable(golfer, position, group, week)  # assign Yj to Xi if j-th digit is 1
                         else:
                             Y[j] = -1 * get_variable(golfer, position, group, week)  # assign ¬Yj to Xi if j-th digit is 0
-                    clause = [-1 * get_variable(golfer, position, group, week)] + Y
-                    sat_solver.add_clause(clause)
-                    all_clauses.append(clause)
+                    for other_position in range(position + 1, players_per_group + 1):
+                        clause = [-1 * get_variable(golfer, position, group, week),
+                                  -1 * get_variable(golfer, other_position, group, week)] + Y
+                        sat_solver.add_clause(clause)
+                        all_clauses.append(clause)
 
 
 # AMO_No golfer plays in more than one group each week
@@ -345,7 +352,10 @@ def solve_sat_problem():
     start_time = time.time()
     sat_status = sat_solver.solve_limited(expect_interrupt=True)
 
+    global id_counter
+
     result_dict = {
+        "ID": id_counter,
         "Problem": f"{num_weeks}-{players_per_group}-{num_groups}",
         "Type": "binary",
         "Time": "",
@@ -353,10 +363,9 @@ def solve_sat_problem():
         "Variables": 0,
         "Clauses": 0
     }
-
     
-    solution = sat_solver.get_model()
-    if solution is None:
+    id_counter += 1
+    if sat_status is False:
         end_time = time.time()
         elapsed_time = end_time - start_time
         print("Not found. Time exceeded (" + '{0:.3f}s'.format(elapsed_time) + ").\n")
@@ -365,36 +374,51 @@ def solve_sat_problem():
         result_dict["Variables"] = sat_solver.nof_vars()
         result_dict["Clauses"] = sat_solver.nof_clauses()
     else:
-        print(
-            "A solution was found in time " + '{0:.3f}s'.format(sat_solver.time()) + ". Generating it now.\n")
-        result_dict["Result"] = "sat"
+        solution = sat_solver.get_model()
+        if solution is None:
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            if elapsed_time > time_budget:
+                print("Timeout exceeded (" + '{0:.3f}s'.format(elapsed_time) + ").\n")
+                result_dict["Result"] = "timeout"
+                result_dict["Time"] = "timeout"
+            else:
+                print("Not found. Time exceeded (" + '{0:.3f}s'.format(elapsed_time) + ").\n")
+                result_dict["Result"] = "unsat"
+                result_dict["Time"] = '{0:.3f}'.format(elapsed_time)
+            result_dict["Variables"] = sat_solver.nof_vars()
+            result_dict["Clauses"] = sat_solver.nof_clauses()
+        else:
+            print(
+                "A solution was found in time " + '{0:.3f}s'.format(sat_solver.time()) + ". Generating it now.\n")
+            result_dict["Result"] = "sat"
 
-        results = []
-        for v in solution:
-            if v > 0:
-                ijkl = resolve_variable(v)
-                if len(ijkl) == 3:
-                    golfer, group, week = ijkl
-                    results.append({"golfer": golfer, "group": group, "week": week})
+            results = []
+            for v in solution:
+                if v > 0:
+                    ijkl = resolve_variable(v)
+                    if len(ijkl) == 3:
+                        golfer, group, week = ijkl
+                        results.append({"golfer": golfer, "group": group, "week": week})
 
-        final_result = process_results(results)
-        show_results(final_result)
+            final_result = process_results(results)
+            show_results(final_result)
 
-        if show_additional_info:
-            sat_accum_stats = sat_solver.accum_stats()
-            print("Restarts: " +
-                    str(sat_accum_stats['restarts']) +
-                    ", conflicts: " +
-                    ", decisions: " +
-                    str(sat_accum_stats['decisions']) +
-                    ", propagations: " +
-                    str(sat_accum_stats["propagations"]))
+            if show_additional_info:
+                sat_accum_stats = sat_solver.accum_stats()
+                print("Restarts: " +
+                        str(sat_accum_stats['restarts']) +
+                        ", conflicts: " +
+                        ", decisions: " +
+                        str(sat_accum_stats['decisions']) +
+                        ", propagations: " +
+                        str(sat_accum_stats["propagations"]))
 
-        result_dict["Time"] = '{0:.3f}'.format(sat_solver.time())
-        result_dict["Variables"] = sat_solver.nof_vars()
-        result_dict["Clauses"] = sat_solver.nof_clauses()
+            result_dict["Time"] = '{0:.3f}'.format(sat_solver.time())
+            result_dict["Variables"] = sat_solver.nof_vars()
+            result_dict["Clauses"] = sat_solver.nof_clauses()
 
-        sat_solver.delete()
+            sat_solver.delete()
 
     # Append the result to a list
     excel_results = []
@@ -402,7 +426,8 @@ def solve_sat_problem():
 
     # Write the results to an Excel file
     df = pd.DataFrame(excel_results)
-    excel_file_path = f"out/results.xlsx"
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    excel_file_path = f"out/results_{current_date}.xlsx"
         
     # Check if the file already exists
     if os.path.exists(excel_file_path):

@@ -84,6 +84,7 @@ def write_results_to_excel(results):
     print("Result written to Excel file:", os.path.abspath(excel_file_path))
     print("Result added to Excel file.")
 
+id_counter = 1
 
 if __name__ == "__main__":
     # Read data from file
@@ -99,6 +100,7 @@ if __name__ == "__main__":
         nPlayers = nGroups * size
         clauses = Value('i', 0)
         result_dict = {
+            "ID": id_counter,
             "Problem": f"{nWeeks}-{size}-{nGroups}",
             "Type": "PyCSP",
             "Time": "",
@@ -106,18 +108,20 @@ if __name__ == "__main__":
             "Variables": 0,
             "Clauses": 0
         }
+        id_counter += 1
         result_dict["Variables"] = nWeeks * nPlayers
+        result_dict["Clauses"] = clauses.value
         # Create a Process
         p = multiprocessing.Process(target=solve_social_golfers, args=(data, result_dict, clauses,))
         p.start()
 
-        # Wait for 10 seconds or until process finishes
-        p.join(10)
+        # Wait for 600 seconds or until process finishes
+        p.join(600)
 
         # If thread is still active
         if p.is_alive():
             result_dict["Result"] = "timeout"
-            result_dict["Time"] = "10.000"
+            result_dict["Time"] = "timeout"
             result_dict["Clauses"] = clauses.value
             write_results_to_excel(result_dict)
             print("solve() function took too long to complete... let's kill it...")
